@@ -197,8 +197,8 @@ def compute_final_score(roic_s,fcf_s,grow_s,valuation):
 
 def classify_signal(score):
     if score is None: return "neutral"
-    if score>=BUY_LEVEL: return "compra"
-    if score<=SELL_LEVEL: return "venta"
+    if score>=BUY_LEVEL: return "buy"
+    if score<=SELL_LEVEL: return "sell"
     return "neutral"
 
 def build_rationale(roic, fcf_yield, rev_cagr, forward_pe, valuation, debt_to_ebitda, signal):
@@ -258,7 +258,7 @@ def fetch_one(symbol):
             ebitda = safe_float(info.get("ebitda"))
             if ebitda and ebitda>0 and m["debt"]>0:
                 debt_ebitda = m["debt"]/ebitda
-        if signal=="compra" and (debt_ebitda is None or debt_ebitda >= BUY_MAX_DEBT):
+        if signal=="buy" and (debt_ebitda is None or debt_ebitda >= BUY_MAX_DEBT):
             signal = "neutral"
         if debt_ebitda and debt_ebitda>MAX_DEBT_EBITDA:
             signal="high_leverage"
@@ -294,10 +294,28 @@ def pretty_print(df):
         ])
     print(tabulate(rows,headers=headers,tablefmt="simple"))
 
+def filter_by_valuation(df, valuations):
+    if not valuations: return df
+    valid = {"cheap","reasonable","expensive","very_expensive","extreme","unknown"}
+    selected = [v.strip().lower() for v in valuations.split(",") if v.strip().lower() in valid]
+    if not selected: return df
+    mask = df["valuation"].isin(selected)
+    return df[mask].reset_index(drop=True)
+
+def filter_by_signal(df, signals):
+    if not signals: return df
+    valid = {"buy","neutral","sell","high_leverage","excluded_sector","error"}
+    selected = [s.strip().lower() for s in signals.split(",") if s.strip().lower() in valid]
+    if not selected: return df
+    mask = df["signal"].isin(selected)
+    return df[mask].reset_index(drop=True)
+
 def main():
-    p=argparse.ArgumentParser(); p.add_argument("--input",required=True); p.add_argument("--workers",type=int,default=4); a=p.parse_args()
+    p=argparse.ArgumentParser(); p.add_argument("--input",required=True); p.add_argument("--workers",type=int,default=4); p.add_argument("--valuation","-v",help="Filter by valuation: cheap,reasonable,expensive,very_expensive,extreme,unknown"); p.add_argument("--signal","-s",help="Filter by signal: buy,neutral,sell,high_leverage,excluded_sector,error"); a=p.parse_args()
     tickers=load_tickers(a.input)
     df=run_screen(tickers,a.workers)
+    df=filter_by_valuation(df,a.valuation)
+    df=filter_by_signal(df,a.signal)
     pretty_print(df)
     df.to_csv("screen_results_v23_growth.csv",index=False)
     print("Guardado: screen_results_v23_growth.csv (método híbrido PEG+FCF)")
