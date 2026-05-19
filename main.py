@@ -101,10 +101,10 @@ def extract_balance_metrics(t):
         try: balance = t.quarterly_balance_sheet
         except: balance = pd.DataFrame()
     if balance.empty: return {"cash":0,"debt":0,"equity":None}
-    cash = find_first_in_df(balance, ["Cash And Cash Equivalents","Cash Cash Equivalents And Short Term Investments"]) or 0
-    debt_s = find_first_in_df(balance, ["Short Long Term Debt","Short Term Debt","Current Debt"]) or 0
-    debt_l = find_first_in_df(balance, ["Long Term Debt"]) or 0
-    equity = find_first_in_df(balance, ["Total Stockholder Equity","Stockholders Equity","Total Equity"])
+    cash = find_first_in_df(balance, ["Cash And Cash Equivalents", "Cash Cash Equivalents And Short Term Investments", "Cash And Short Term Investments", "Cash"]) or 0
+    debt_s = find_first_in_df(balance, ["Short Long Term Debt", "Short Term Debt", "Current Debt", "Current Portions of Long-Term Debt"]) or 0
+    debt_l = find_first_in_df(balance, ["Long Term Debt", "Long Term Debt And Capital Lease Obligation"]) or 0
+    equity = find_first_in_df(balance, ["Total Stockholder Equity", "Stockholders Equity", "Total Equity", "Common Stock Equity"])
     return {"cash":cash,"debt":debt_s+debt_l,"equity":equity}
 
 def compute_enterprise_value(mcap,debt,cash):
@@ -116,28 +116,46 @@ def compute_roic(t):
     try: income, balance = t.financials, t.balance_sheet
     except: return None
     if income is None or income.empty or balance is None or balance.empty: return None
-    ebit = find_first_in_df(income, ["Operating Income","EBIT"])
+    ebit = find_first_in_df(income, ["Operating Income", "EBIT", "Normalized EBIT"])
     if ebit is None: return None
-    pretax = find_first_in_df(income, ["Pretax Income","Income Before Tax"])
-    taxes = find_first_in_df(income, ["Income Tax Expense","Tax Provision"])
-    tax_rate = clamp(abs(taxes)/abs(pretax),0,0.5) if pretax and taxes and pretax!=0 else 0.21
+    pretax = find_first_in_df(income, ["Pretax Income", "Income Before Tax"])
+    taxes = find_first_in_df(income, ["Income Tax Expense", "Tax Provision"])
+    
+    # Improved tax rate logic: avoid issues with negative pretax or taxes
+    if pretax and taxes and pretax > 0 and taxes > 0:
+        tax_rate = clamp(taxes/pretax, 0, 0.4)
+    else:
+        tax_rate = 0.21
+        
     nopat = ebit*(1-tax_rate)
     m = extract_balance_metrics(t)
     if m["equity"] is None: return None
     invested = m["equity"] + m["debt"] - m["cash"]
     if invested<=0: return None
-    return clamp(nopat/invested*100, -50, 50)
+    return clamp(nopat/invested*100, -50, 250)
 
 def compute_revenue_cagr(t):
     try: inc = t.financials
     except: return None
     if inc is None or inc.empty: return None
-    row = next((i for i in inc.index if "revenue" in i.lower()), None)
+    
+    # Robust row selection: prefer Total Revenue or Operating Revenue
+    row = None
+    for cand in ["Total Revenue", "Operating Revenue"]:
+        norm_cand = normalize_name(cand)
+        norm_idx = {normalize_name(i): i for i in inc.index}
+        if norm_cand in norm_idx:
+            row = norm_idx[norm_cand]
+            break
+            
+    if not row:
+        row = next((i for i in inc.index if "revenue" in i.lower() and "cost" not in i.lower()), None)
+        
     if not row: return None
     rev = inc.loc[row].dropna().astype(float).values
     if len(rev)<2 or rev[-1]<=0: return None
     cagr = ((rev[0]/rev[-1])**(1/(len(rev)-1))-1)*100
-    return clamp(cagr, -50, 35)
+    return clamp(cagr, -50, 45)
 
 def compute_fcf_yield(info, ev, t, fmp_fcf=None):
     if fmp_fcf is not None and abs(fmp_fcf)<=100: 
@@ -153,9 +171,10 @@ def compute_fcf_yield(info, ev, t, fmp_fcf=None):
         try:
             cf = t.cashflow
             if cf is not None and not cf.empty:
-                ocf2 = find_first_in_df(cf, ["Total Cash From Operating Activities","Operating Cash Flow"])
-                cap2 = find_first_in_df(cf, ["Capital Expenditures"])
+                ocf2 = find_first_in_df(cf, ["Total Cash From Operating Activities", "Operating Cash Flow"])
+                cap2 = find_first_in_df(cf, ["Capital Expenditures", "Capital Expenditure", "Purchase of PPE"])
                 if ocf2 is not None and cap2 is not None:
+                    # Capex is usually negative in yfinance, so ocf2 + cap2 is correct (subtraction)
                     fcf = ocf2 + cap2
         except: pass
     if fcf is None or not ev or ev<=0: return None
