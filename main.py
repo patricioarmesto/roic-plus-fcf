@@ -49,6 +49,30 @@ def fmt_mcap(x):
     if abs(x)>=1e6: return f"{x/1e6:.2f}M"
     return str(int(x))
 
+# Colors
+C_RESET = "\033[0m"
+C_BOLD = "\033[1m"
+C_GREEN = "\033[92m"
+C_RED = "\033[91m"
+C_YELLOW = "\033[93m"
+C_CYAN = "\033[96m"
+
+def color_signal(s):
+    if not s: return "-"
+    s_lower = s.lower()
+    if s_lower == "buy": return f"{C_GREEN}{C_BOLD}{s.upper()}{C_RESET}"
+    if s_lower == "sell": return f"{C_RED}{s.upper()}{C_RESET}"
+    if s_lower == "high_leverage": return f"{C_YELLOW}{s.upper()}{C_RESET}"
+    if s_lower == "excluded_sector": return f"{C_RESET}{s.lower()}{C_RESET}"
+    return s
+
+def color_score(score, signal):
+    if score is None: return "-"
+    fmt = fmt_pct(score)
+    if signal == "buy": return f"{C_GREEN}{fmt}{C_RESET}"
+    if signal == "sell": return f"{C_RED}{fmt}{C_RESET}"
+    return fmt
+
 def load_tickers(path: str) -> List[str]:
     p = Path(path)
     if not p.exists(): raise FileNotFoundError(path)
@@ -297,13 +321,19 @@ def run_screen(tickers, workers=6):
     return df.reset_index(drop=True)
 
 def pretty_print(df):
-    headers=["Ticker","Signal","Score","ROIC","FCFY","CAGR","Val","D/E","FwdPE"]
-    rows=[]
-    for _,r in df.iterrows():
+    if df.empty:
+        print(f"\n{C_YELLOW}No se encontraron resultados con los filtros aplicados.{C_RESET}")
+        return
+
+    headers = ["Ticker", "Signal", "Score", "ROIC", "FCFY", "CAGR", "Valuation", "D/E", "FwdPE"]
+    rows = []
+    
+    for _, r in df.iterrows():
+        sig = r.get("signal")
         rows.append([
-            r.get("ticker"),
-            r.get("signal"),
-            fmt_pct(r.get("score")),
+            f"{C_BOLD}{r.get('ticker')}{C_RESET}",
+            color_signal(sig),
+            color_score(r.get("score"), sig),
             fmt_pct(r.get("roic")),
             fmt_pct(r.get("fcf_yield")),
             fmt_pct(r.get("rev_cagr")),
@@ -311,7 +341,24 @@ def pretty_print(df):
             f"{r.get('debt_to_ebitda'):.1f}" if pd.notna(r.get('debt_to_ebitda')) else "-",
             f"{r.get('forward_pe'):.1f}" if pd.notna(r.get('forward_pe')) else "-",
         ])
-    print(tabulate(rows,headers=headers,tablefmt="simple"))
+    
+    print("\n" + tabulate(
+        rows, 
+        headers=headers, 
+        tablefmt="rounded_grid", 
+        stralign="center", 
+        numalign="center"
+    ))
+    
+    # Summary
+    if "signal" in df.columns:
+        counts = df["signal"].value_counts()
+        print(f"\n{C_CYAN}{C_BOLD}SUMMARY:{C_RESET}")
+        for sig, count in counts.items():
+            color = C_GREEN if sig == "buy" else (C_RED if sig == "sell" else (C_YELLOW if sig == "high_leverage" else ""))
+            print(f"  {color}{sig.upper():<15}{C_RESET}: {count}")
+        print(f"  {'TOTAL':<15}: {len(df)}")
+    print("")
 
 def filter_by_valuation(df, valuations):
     if not valuations: return df

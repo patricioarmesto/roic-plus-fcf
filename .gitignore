@@ -14,3 +14,6 @@ wheels/
 
 # Output
 *.csv
+
+.antigravitycli
+scratch/
