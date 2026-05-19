@@ -78,8 +78,10 @@ def load_tickers(path: str) -> List[str]:
     if not p.exists(): raise FileNotFoundError(path)
     if p.suffix.lower()==".csv":
         df = pd.read_csv(p)
-        col = next((c for c in df.columns if c.lower() in ["ticker","tickers","symbol","symbols"]), None)
-        if not col: raise ValueError("Ticker column not found")
+        # Normalize column names to handle whitespace and case sensitivity
+        df.columns = [c.strip().lower() for c in df.columns]
+        col = next((c for c in df.columns if c in ["ticker","tickers","symbol","symbols"]), None)
+        if not col: raise ValueError("Ticker column not found in CSV")
         return df[col].astype(str).str.strip().dropna().drop_duplicates().tolist()
     return list(dict.fromkeys([l.strip() for l in p.read_text().splitlines() if l.strip() and not l.startswith("#")]))
 
@@ -102,6 +104,9 @@ def fetch_fmp_metrics(symbol):
     try:
         r = requests.get("https://financialmodelingprep.com/stable/key-metrics-ttm",
                          params={"symbol":symbol,"apikey":FMP_API_KEY}, timeout=10)
+        if r.status_code == 429:
+            print(f"{C_RED}Warning: FMP API Rate limit exceeded (429).{C_RESET}")
+            return empty
         r.raise_for_status()
         data = r.json()
         if not isinstance(data,list) or not data: return empty
@@ -155,7 +160,9 @@ def compute_roic(t):
     m = extract_balance_metrics(t)
     if m["equity"] is None: return None
     invested = m["equity"] + m["debt"] - m["cash"]
-    if invested<=0: return None
+    # If invested capital is negative but NOPAT is positive, it's a "super-quality" case (buybacks)
+    if invested<=0:
+        return 250.0 if nopat > 0 else None
     return clamp(nopat/invested*100, -50, 250)
 
 def compute_revenue_cagr(t):
@@ -177,9 +184,10 @@ def compute_revenue_cagr(t):
         
     if not row: return None
     rev = inc.loc[row].dropna().astype(float).values
-    if len(rev)<2 or rev[-1]<=0: return None
+    # Check for at least 2 data points and ensure values are positive for CAGR calculation
+    if len(rev)<2 or rev[-1]<=0 or rev[0]<=0: return None
     cagr = ((rev[0]/rev[-1])**(1/(len(rev)-1))-1)*100
-    return clamp(cagr, -50, 45)
+    return clamp(cagr, -50, 100)
 
 def compute_fcf_yield(info, ev, t, fmp_fcf=None):
     if fmp_fcf is not None and abs(fmp_fcf)<=100: 
@@ -307,7 +315,11 @@ def fetch_one(symbol):
             signal="high_leverage"
         rationale = build_rationale(roic, fcf_y, rev_cagr, forward_pe, val, debt_ebitda, signal)
         res.update({"sector":sector,"signal":signal,"score":score,"roic":roic,"fcf_yield":fcf_y,"rev_cagr":rev_cagr,"valuation":val,"debt_to_ebitda":debt_ebitda,"price":price,"market_cap":mcap,"forward_pe":forward_pe,"rationale":rationale})
-    except Exception as e: res.update({"signal":"error","error":str(e)})
+    except Exception as e: 
+        err_msg = str(e)
+        if "Too Many Requests" in err_msg or "429" in err_msg:
+            err_msg = "Rate limited by API"
+        res.update({"signal":"error","error":err_msg})
     time.sleep(0.12)
     return res
 
