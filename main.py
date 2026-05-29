@@ -6,7 +6,7 @@ import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional, List
-import os, re, time
+import os, re, time, sys
 from functools import lru_cache
 
 import numpy as np
@@ -390,7 +390,17 @@ def filter_by_signal(df, signals):
 
 def main():
     p=argparse.ArgumentParser(); p.add_argument("--input",required=True); p.add_argument("--workers",type=int,default=4); p.add_argument("--valuation","-v",help="Filter by valuation: cheap,reasonable,expensive,very_expensive,extreme,unknown"); p.add_argument("--signal","-s",help="Filter by signal: buy,neutral,sell,high_leverage,excluded_sector,error"); a=p.parse_args()
-    tickers=load_tickers(a.input)
+    
+    try:
+        tickers=load_tickers(a.input)
+    except FileNotFoundError:
+        print(f"\n{C_RED}{C_BOLD}Error: No se encontró el archivo '{a.input}'.{C_RESET}")
+        print(f"{C_YELLOW}Por favor, verifica la ruta y vuelve a intentarlo.{C_RESET}\n")
+        sys.exit(1)
+    except Exception as e:
+        print(f"\n{C_RED}{C_BOLD}Error al procesar el archivo '{a.input}':{C_RESET} {e}\n")
+        sys.exit(1)
+        
     df=run_screen(tickers,a.workers)
     df=filter_by_valuation(df,a.valuation)
     df=filter_by_signal(df,a.signal)
