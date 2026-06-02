@@ -6,8 +6,9 @@ import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional, List
-import os, re, time, sys
+import os, re, time, sys, json
 from functools import lru_cache
+from datetime import date
 
 import numpy as np
 import pandas as pd
@@ -98,9 +99,34 @@ def find_first_in_df(df, candidates):
                 if v is not None: return v
     return None
 
+FMP_CACHE_DIR = Path(".fmp_cache")
+
+def _fmp_cache_path(symbol: str) -> Path:
+    return FMP_CACHE_DIR / f"{symbol.upper()}.json"
+
+def _load_fmp_cache(symbol: str):
+    path = _fmp_cache_path(symbol)
+    if not path.exists():
+        return None
+    try:
+        cached = json.loads(path.read_text())
+        if cached.get("_date") == str(date.today()):
+            return {k: v for k, v in cached.items() if not k.startswith("_")}
+    except Exception:
+        pass
+    return None
+
+def _save_fmp_cache(symbol: str, data: dict):
+    FMP_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    payload = {"_date": str(date.today()), **data}
+    _fmp_cache_path(symbol).write_text(json.dumps(payload, indent=2))
+
 @lru_cache(maxsize=2000)
 def fetch_fmp_metrics(symbol):
     empty = {"roic_pct":None,"fcf_yield_pct":None,"debt_to_ebitda":None,"pe_forward":None}
+    cached = _load_fmp_cache(symbol)
+    if cached is not None:
+        return cached
     if not FMP_API_KEY: return empty
     try:
         r = requests.get("https://financialmodelingprep.com/stable/key-metrics-ttm",
@@ -116,12 +142,14 @@ def fetch_fmp_metrics(symbol):
         fcf_raw = safe_float(d.get("freeCashFlowYieldTTM"))
         debt_raw = safe_float(d.get("debtToEbitdaTTM"))
         pe_fwd = safe_float(d.get("peForwardTTM")) or safe_float(d.get("forwardPE"))
-        return {
+        result = {
             "roic_pct": roic_raw * 100 if roic_raw is not None else None,
             "fcf_yield_pct": fcf_raw * 100 if fcf_raw is not None else None,
             "debt_to_ebitda": debt_raw,
             "pe_forward": pe_fwd
         }
+        _save_fmp_cache(symbol, result)
+        return result
     except: return empty
 
 def extract_balance_metrics(t):

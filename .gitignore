@@ -15,5 +15,8 @@ wheels/
 # Output
 *.csv
 
+# FMP daily cache
+.fmp_cache/
+
 .antigravitycli
 scratch/
