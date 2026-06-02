@@ -370,6 +370,17 @@ def pretty_print(df):
             color = C_GREEN if sig == "buy" else (C_RED if sig == "sell" else (C_YELLOW if sig == "high_leverage" else ""))
             print(f"  {color}{sig.upper():<15}{C_RESET}: {count}")
         print(f"  {'TOTAL':<15}: {len(df)}")
+
+    # Column legend
+    print(f"\n{C_CYAN}{C_BOLD}COLUMN GUIDE:{C_RESET}")
+    print(f"  {C_BOLD}ROIC{C_RESET}   Return on Invested Capital (%) = NOPAT / (equity + debt - cash)")
+    print(f"  {C_BOLD}FCFY{C_RESET}   Free Cash Flow Yield (%) = FCF / Enterprise Value")
+    print(f"  {C_BOLD}CAGR{C_RESET}   Revenue Compound Annual Growth Rate (%) over past years")
+    print(f"  {C_BOLD}Valuation{C_RESET}  PEG ratio (growth>15% CAGR) or FCF Yield (value) — cheap/reasonable/expensive/extreme")
+    print(f"  {C_BOLD}D/E{C_RESET}    Debt-to-EBITDA ratio — leverage metric (lower is better)")
+    print(f"  {C_BOLD}FwdPE{C_RESET}  Forward Price-to-Earnings ratio")
+    print(f"  {C_BOLD}Score{C_RESET}  Weighted: ROIC×45% + FCFY×35% + CAGR×20%, adjusted by valuation penalty")
+    print(f"  {C_BOLD}Signal{C_RESET}  buy≥80 | sell≤40 | neutral | high_leverage if D/E > 3.5")
     print("")
 
 def filter_by_valuation(df, valuations):
