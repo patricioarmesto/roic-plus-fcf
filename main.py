@@ -27,7 +27,8 @@ BUY_LEVEL = 80
 SELL_LEVEL = 40
 MAX_DEBT_EBITDA = 3.5
 BUY_MAX_DEBT = 2.5
-EXCLUDED_SECTORS = {"banks","insurance","bank"}
+EXCLUDED_SECTORS: set[str] = set()
+BANK_SECTORS = {"banks","insurance","bank","financial services"}
 GROWTH_THRESHOLD = 15.0  # >15% CAGR usa PEG
 
 def safe_float(x):
@@ -165,6 +166,16 @@ def compute_roic(t):
         return 250.0 if nopat > 0 else None
     return clamp(nopat/invested*100, -50, 250)
 
+def compute_roe(t):
+    try: income = t.financials
+    except: return None
+    if income is None or income.empty: return None
+    net_income = find_first_in_df(income, ["Net Income", "Net Income Common Stockholders"])
+    if net_income is None: return None
+    m = extract_balance_metrics(t)
+    if m["equity"] is None or m["equity"] <= 0: return None
+    return clamp(net_income / m["equity"] * 100, -50, 250)
+
 def compute_revenue_cagr(t):
     try: inc = t.financials
     except: return None
@@ -252,7 +263,7 @@ def classify_signal(score):
     if score<=SELL_LEVEL: return "sell"
     return "neutral"
 
-def build_rationale(roic, fcf_yield, rev_cagr, forward_pe, valuation, debt_to_ebitda, signal):
+def build_rationale(roic, fcf_yield, rev_cagr, forward_pe, valuation, debt_to_ebitda, signal, is_bank=False):
     parts = []
     is_growth = rev_cagr is not None and rev_cagr > GROWTH_THRESHOLD
     if is_growth:
@@ -272,8 +283,9 @@ def build_rationale(roic, fcf_yield, rev_cagr, forward_pe, valuation, debt_to_eb
         else:
             parts.append("No FCF yield data")
     if roic is not None:
+        label = "ROE" if is_bank else "ROIC"
         quality = "high" if roic >= ROIC_GOOD else ("mid" if roic >= 10 else "low")
-        parts.append(f"ROIC={roic:.1f}% ({quality})")
+        parts.append(f"{label}={roic:.1f}% ({quality})")
     if signal == "high_leverage":
         parts.append(f"Flagged: Debt/EBITDA={debt_to_ebitda:.1f}x > {MAX_DEBT_EBITDA}x")
     elif signal == "neutral" and debt_to_ebitda is not None and debt_to_ebitda >= BUY_MAX_DEBT:
@@ -292,12 +304,14 @@ def fetch_one(symbol):
                 info={"currentPrice":getattr(fi,"last_price",None),"marketCap":getattr(fi,"market_cap",None),"freeCashflow":None,"operatingCashflow":None,"capitalExpenditures":None,"ebitda":None,"forwardPE":None}
             except: info={}
         sector=normalize_sector(info.get("sector"))
+        industry = normalize_sector(info.get("industry"))
         if sector in EXCLUDED_SECTORS:
             res.update({"sector":sector,"signal":"excluded_sector"}); return res
         price=safe_float(info.get("currentPrice")); mcap=safe_float(info.get("marketCap"))
         m=extract_balance_metrics(t); ev=compute_enterprise_value(mcap,m["debt"],m["cash"])
         fmp=fetch_fmp_metrics(symbol)
-        roic=fmp["roic_pct"] if fmp["roic_pct"] is not None else compute_roic(t)
+        is_bank = sector in BANK_SECTORS or "bank" in industry or "insurance" in industry
+        roic=fmp["roic_pct"] if fmp["roic_pct"] is not None and not is_bank else (compute_roe(t) if is_bank else compute_roic(t))
         fcf_y=compute_fcf_yield(info,ev,t,fmp["fcf_yield_pct"])
         rev_cagr=compute_revenue_cagr(t)
         forward_pe = safe_float(info.get("forwardPE")) or fmp["pe_forward"]
@@ -313,11 +327,12 @@ def fetch_one(symbol):
             signal = "neutral"
         if debt_ebitda and debt_ebitda>MAX_DEBT_EBITDA:
             signal="high_leverage"
-        rationale = build_rationale(roic, fcf_y, rev_cagr, forward_pe, val, debt_ebitda, signal)
+        rationale = build_rationale(roic, fcf_y, rev_cagr, forward_pe, val, debt_ebitda, signal, is_bank)
         res.update({"sector":sector,"signal":signal,"score":score,"roic":roic,"fcf_yield":fcf_y,"rev_cagr":rev_cagr,"valuation":val,"debt_to_ebitda":debt_ebitda,"price":price,"market_cap":mcap,"forward_pe":forward_pe,"rationale":rationale})
     except Exception as e: 
         err_msg = str(e)
         if "Too Many Requests" in err_msg or "429" in err_msg:
+            print(f"{C_RED}Warning: Hit rate limit for {symbol}.{C_RESET}")
             err_msg = "Rate limited by API"
         res.update({"signal":"error","error":err_msg})
     time.sleep(0.12)
@@ -337,7 +352,7 @@ def pretty_print(df):
         print(f"\n{C_YELLOW}No se encontraron resultados con los filtros aplicados.{C_RESET}")
         return
 
-    headers = ["Ticker", "Signal", "Score", "ROIC", "FCFY", "CAGR", "Valuation", "D/E", "FwdPE"]
+    headers = ["Ticker", "Signal", "Score", "ROIC/E", "FCFY", "CAGR", "Valuation", "D/E", "FwdPE"]
     rows = []
     
     for _, r in df.iterrows():
@@ -374,12 +389,13 @@ def pretty_print(df):
     # Column legend
     print(f"\n{C_CYAN}{C_BOLD}COLUMN GUIDE:{C_RESET}")
     print(f"  {C_BOLD}ROIC{C_RESET}   Return on Invested Capital (%) = NOPAT / (equity + debt - cash)")
+    print(f"            ROE for banks/insurance = Net Income / Equity")
     print(f"  {C_BOLD}FCFY{C_RESET}   Free Cash Flow Yield (%) = FCF / Enterprise Value")
     print(f"  {C_BOLD}CAGR{C_RESET}   Revenue Compound Annual Growth Rate (%) over past years")
     print(f"  {C_BOLD}Valuation{C_RESET}  PEG ratio (growth>15% CAGR) or FCF Yield (value) — cheap/reasonable/expensive/extreme")
     print(f"  {C_BOLD}D/E{C_RESET}    Debt-to-EBITDA ratio — leverage metric (lower is better)")
     print(f"  {C_BOLD}FwdPE{C_RESET}  Forward Price-to-Earnings ratio")
-    print(f"  {C_BOLD}Score{C_RESET}  Weighted: ROIC×45% + FCFY×35% + CAGR×20%, adjusted by valuation penalty")
+    print(f"  {C_BOLD}Score{C_RESET}  Weighted: ROIC/ROE×45% + FCFY×35% + CAGR×20%, adjusted by valuation penalty")
     print(f"  {C_BOLD}Signal{C_RESET}  buy≥80 | sell≤40 | neutral | high_leverage if D/E > 3.5")
     print("")
 
@@ -417,6 +433,6 @@ def main():
     df=filter_by_signal(df,a.signal)
     pretty_print(df)
     df.to_csv("screen_results_v23_growth.csv",index=False)
-    print("Guardado: screen_results_v23_growth.csv (método híbrido PEG+FCF)")
+    print("Guardado: screen_results_v23_growth.csv (ROIC/ROE + PEG+FCF)")
 
 if __name__=="__main__": main()
